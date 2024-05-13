@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<!-- 手書き数字を判定するWebアプリケーション -->
+<!-- 前提として、tensorflowモデルが本ファイルと同じ位置に mnist_model_jsフォルダーとして存在 -->
+<!-- 前提として、モデルの入力は[1,28,28,1]つまり28×28の白黒 -->
+<!-- 前提として、モデルの出力は0から9までのそれぞれの数字である確率 -->
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web手書き文字によるMNIST判定</title>
+    <style>
+     body    {background-color: powderblue;}
+     h1      {font-family: courier; color: black; }
+     h2      {font-family: courier; color: blue; }
+     p       {font-family: courier; color: red; }
+     canvas {background-color: black; }
+    </style>
+  </head>
+
+  <body>
+    <h1>Web上での手書き文字MNIST判定</h1>
+    <h2>作ったモデルの実装例です</h2>
+
+    <p>この上でマウスを動かして数字を書く</p>
+    <canvas id="mouse-input" width="280" height="280">ブラウザがcanvasをサポートしていません</canvas>
+    <p>28 × 28 にした入力文字が以下に表示されます</p>    
+    <canvas id="decoded-area" width="28" height="28">ブラウザがcanvasをサポートしていません</canvas>
+    <br> <button id="clear">　　　　　文字消去　　　　</button>
+    <br> <button id="write">"image.jpg"ファイルとしてダウンロード</button>
+    <br> <button id="hantei">　　　　　判定　　　　　</button>
+
+    <h2>判定結果　確率が出ます</h2>
+    <table id="resultTable" border="3" width="300">
+      <tr>
+        <th>数字</th>
+        <th>0</th>
+        <th>1</th>
+        <th>2</th>
+        <th>3</th>
+        <th>4</th>
+        <th>5</th>
+        <th>6</th>
+        <th>7</th>
+        <th>8</th>
+        <th>9</th>
+      </tr>
+      <tr>
+        <td>確率</td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+      </tr>
+    </table>
+
+    <!-- Load Signature Pad: https://github.com/szimek/signature_pad -->
+    <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.0.0/dist/signature_pad.umd.min.js"></script>
+    <!-- Load TensorFlow.js: https://www.tensorflow.org/js/tutorials/setup?hl=ja -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
+ 
+    <script>
+      // マウスでの描画領域
+      const CanvasMouseInput = document.getElementById("mouse-input");
+      const ContextMouseInput = CanvasMouseInput.getContext('2d');
+      const signaturePad = new SignaturePad(CanvasMouseInput, {minWidth: 1, maxWidth: 20, penColor: 'white'});
+
+      // 28 × 28 での表示領域
+      const CanvasForAI = document.getElementById("decoded-area");
+      const ContextForAI = CanvasForAI.getContext('2d');
+
+      // 結果の表示領域
+      const ResultDisplayTable = document.getElementById("resultTable");
+
+      // マウス描画領域 に描かれた内容を 28×28表示領域 に表示
+      function DrawInputForAI() {
+        ContextForAI.drawImage(CanvasMouseInput, 0, 0, 28, 28);
+      }
+
+      // モデルの読み込み
+      let MNISTmodel;
+      async function LoadMNISTmodel(){
+        // Load MNIST model
+        MNISTmodel = await tf.loadLayersModel('./mnist_model_js/model.json');
+      }
+      LoadMNISTmodel();
+
+      // 結果(各数字である確率)の保存領域
+      let Possibilities = Array(10);
+
+      // マウスボタンが離された -> マウス描画領域に描かれた内容を28×28表示領域に表示
+      signaturePad.addEventListener("endStroke", () => {
+        DrawInputForAI() ;
+      }, { once: false });
+
+      // 文字消去ボタンが押された -> マウス描画領域と28×28表示領域を黒く(0で)埋める
+      document.getElementById('clear').addEventListener('click', function () {
+        signaturePad.clear();
+        ContextForAI.fillStyle = "black";
+        ContextForAI.fillRect(0, 0, 28, 28);
+      });
+
+      // 画像書き出しボタンが押された
+      document.getElementById('write').addEventListener('click', function () {
+        // dummy "a" to use toDataURL())
+        const a = document.createElement("a");
+        a.href = CanvasForAI.toDataURL("image/jpeg", 0.75); // PNGなら"image/png"
+        a.download = "image.jpg";
+        a.click();
+      });
+
+      // 判定ボタンが押された
+      document.getElementById('hantei').addEventListener('click', function () {
+        // 28×28表示領域の画像データーを取り込む
+        // https://js.tensorflow.org/api/1.0.0/#browser.fromPixels
+        tfData = tf.browser.fromPixels(CanvasForAI, 1);
+        // 浮動小数点にして255で割る
+        // さらに次元を追加して [28,28,1] -> [1,28,28,1] にする
+        tfAIdata = tfData.toFloat().div(tf.scalar(255)).expandDims();
+        // 推論
+        runInference(tfAIdata); 
+        // 表示
+        for (i=0; i<10; i++) {
+          ResultDisplayTable.rows[1].cells[i+1].innerHTML = Possibilities[i].toFixed(2)
+        }
+      });
+
+    <!-- Deep Learning inference -->
+    function runInference(x1){
+      // メモリーリーク対策のためtf.tidyを使用
+      tf.tidy(() => {
+        const y1 = MNISTmodel.predict(x1); 
+        Possibilities = y1.dataSync()
+        return;
+      });
+    }
+    <!-- End of Deep Learning inference -->
+    </script>
+
+    <!-- ブラウザでJavascriptが有効になっていない -->
+    <noscript>
+    <p>動きません!</p>
+    <p>Javascriptをオンにして下さい!</p>
+    </noscript>
+
+  </body>
+</html>
